@@ -1,0 +1,9 @@
+#enviroments
+.venv/
+__pycache__/
+
+#ignore all data
+data/
+
+#allow model tracking
+!data/processed/
