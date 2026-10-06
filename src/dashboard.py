@@ -54,7 +54,7 @@ if st.button("Analyze Student Sample") and uploaded_files:
                         col3.success(f"✅ TYPICAL PROFILE (< {data['threshold_used']:.2f})")
                         
                     st.markdown("---")
-                    st.write("### Clinical Explainability (Grad-CAM & Diagnostics)")
+                    st.write("### Grad-CAM Heatmaps")
                     st.write("Visual heatmaps and explicit geometric deviations activating the classification model.")
                     
                     sorted_letters = sorted(data["letter_details"], key=lambda x: x["probability"], reverse=True)
@@ -69,11 +69,6 @@ if st.button("Analyze Student Sample") and uploaded_files:
                             st.image(img, use_container_width=True)
                             st.write(f"**{letter['filename']}**")
                             st.write(f"**Risk:** {letter['probability']:.2f}")
-                            
-                            # Render the new diagnostic text strings
-                            for diag in letter["diagnostics"]:
-                                st.caption(f"• {diag}")
-                            st.markdown("---")
                             
             else:
                 st.error(f"Backend API Error: {response.status_code}")

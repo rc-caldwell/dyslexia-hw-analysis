@@ -19,14 +19,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Define the 36 possible characters (a-z, 0-9) for target-aware routing
 TARGET_CHARS = list(string.ascii_lowercase + string.digits)
 
-# --- Standard Baselines for Diagnostic Text ---
-BASELINES = {
-    'aspect_ratio': (0.50, 1.15),  # accepts the testing dataset's 1:1 square crops
-    'solidity': (0.5, 0.9),        
-    'extent': (0.35, 0.8),         
-    'symmetry': 0.05               
-}
-
 class Encoder(nn.Module):
     def __init__(self, latent_dim=32):
         super().__init__()
@@ -108,20 +100,8 @@ def extract_geometry_from_bytes(image_bytes):
     left_density = cv2.countNonZero(thresh[y:y+h, x:x + w//2]) / (rect_area / 2)
     right_density = cv2.countNonZero(thresh[y:y+h, x + w//2:x+w]) / (rect_area / 2)
     
-    diagnostics = []
-    if not (BASELINES['aspect_ratio'][0] <= aspect_ratio <= BASELINES['aspect_ratio'][1]):
-        diagnostics.append(f"Severe Proportion Imbalance (Ratio: {aspect_ratio:.2f})")
-    if extent < BASELINES['extent'][0]:
-        diagnostics.append(f"Fragmented Stroke/Bounding Error (Extent: {extent:.2f})")
-        
-    # Directional symmetry check to catch specific reversals
-    if left_density - right_density > BASELINES['symmetry']:
-        diagnostics.append(f"Left-Biased Stroke Density (L: {left_density:.2f}, R: {right_density:.2f})")
-    elif right_density - left_density > BASELINES['symmetry']:
-        diagnostics.append(f"Right-Biased Stroke Density (L: {left_density:.2f}, R: {right_density:.2f})")
-    
     features = [center_x, center_y, aspect_ratio, solidity, extent, left_density, right_density]
-    return features, diagnostics
+    return features
 
 @app.post("/screen")
 async def screen_student_sample(
@@ -140,7 +120,7 @@ async def screen_student_sample(
     for file in files:
         image_bytes = await file.read()
         
-        geo_features, diagnostics = extract_geometry_from_bytes(image_bytes)
+        geo_features = extract_geometry_from_bytes(image_bytes)
         if not geo_features: continue
             
         pil_img = Image.open(io.BytesIO(image_bytes)).convert('L')
@@ -164,19 +144,6 @@ async def screen_student_sample(
         prob = float(xgb.predict_proba(pd.DataFrame([vector], columns=feature_cols))[0, 1])
         student_probs.append(prob)
         
-        char_detected = match.group(1).lower() if match else ""
-
-        if prob < 0.5:
-            final_diagnostics = ["Typical stroke structure"]
-        elif not diagnostics:
-            # Context-aware CNN fallback text
-            if char_detected in ['b', 'd', 'p', 'q', 's', 'z']:
-                final_diagnostics = [f"Potential Reversal or Spatial Anomaly (CNN Match)"]
-            else:
-                final_diagnostics = ["Complex Structural Anomaly (CNN Match)"]
-        else:
-            final_diagnostics = diagnostics
-        
         cam_resized = cv2.resize(cam, (pil_img.width, pil_img.height))
         heatmap = cv2.applyColorMap(np.uint8(255 * cam_resized), cv2.COLORMAP_JET)
         
@@ -190,7 +157,6 @@ async def screen_student_sample(
             "filename": file.filename,
             "probability": prob,
             "heatmap_b64": b64_img,
-            "diagnostics": final_diagnostics 
         })
         processed_count += 1
         
