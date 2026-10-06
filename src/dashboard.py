@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
+import base64
 
 # Page Configuration
 st.set_page_config(page_title="Dysgraphia Screener", layout="wide")
@@ -48,12 +49,22 @@ if st.button("Analyze Student Sample") and uploaded_files:
                         col3.success("✅ TYPICAL PROFILE")
                         
                     # Plot the individual letter scores
-                    st.write("### Individual Letter Anomaly Probabilities")
-                    chart_data = pd.DataFrame(
-                        data["letter_breakdown"], 
-                        columns=["Probability of Anomaly"]
-                    )
-                    st.bar_chart(chart_data)
+                    st.write("### Character Analysis & Attention Maps")
+                    st.write("Heatmaps indicate the areas where the model flagged an anomaly in the letter shape.")
+
+                    grid_cols = st.columns(4)
+
+                    for idx, item in enumerate(data["results"]):
+                        with grid_cols[idx % 4]:
+                            image_data = base64.b64decode(item["heatmap_b64"])
+
+                            prob_str = f"Risk: {item['probability']:.1%}"
+
+                            st.image(
+                                image_data,
+                                caption=f"{item['filename']} | {prob_str}",
+                                use_container_width=True
+                            )
                     
             else:
                 st.error(f"Backend API Error: {response.status_code}")

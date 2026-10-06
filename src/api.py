@@ -9,6 +9,7 @@ import pandas as pd
 from xgboost import XGBClassifier
 import io
 import cv2
+import base64
 
 # 1. Initialize App and Models
 app = FastAPI(title="Dysgraphia Screening API")
@@ -24,9 +25,17 @@ class Encoder(nn.Module):
         )
         self.flatten = nn.Flatten()
         self.encoder_linear = nn.Linear(64 * 8 * 8, latent_dim)
+        self.gradients = None
+    
+    def activations_hook(self, grad):
+        self.gradients = grad
 
     def forward(self, x):
-        return self.encoder_linear(self.flatten(self.encoder_conv(x)))
+        x = self.encoder_conv(x)
+        if x.requires_grad: 
+            x.register_hook(self.activations_hook)
+        self.activations = x
+        return self.encoder_linear(self.flatten(x))
 
 # Load models globally so they stay in memory between API calls
 encoder = Encoder().to(device)
@@ -81,7 +90,8 @@ def extract_geometry_from_bytes(image_bytes):
 async def screen_student_sample(files: List[UploadFile] = File(...)):
     feature_cols = ['center_x', 'center_y', 'aspect_ratio', 'solidity', 'extent', 'left_density', 'right_density'] + \
                    [f'latent_{i}' for i in range(32)]
-                   
+
+    results = []        
     student_probs = []
     processed_count = 0
     
@@ -97,16 +107,53 @@ async def screen_student_sample(files: List[UploadFile] = File(...)):
         pil_img = Image.open(io.BytesIO(image_bytes)).convert('L')
         tensor = transform(pil_img).unsqueeze(0).to(device)
         
-        with torch.no_grad():
-            latent = encoder(tensor).cpu().numpy().flatten()
-            
+        tensor.requires_grad = True
+        encoder.zero_grad()
+        
+        latent_tensor = encoder(tensor)
+        latent = latent_tensor.detach().cpu().numpy().flatten()
+
         # 3. XGBoost Inference
         vector = geo_features + latent.tolist()
         df_vector = pd.DataFrame([vector], columns=feature_cols)
         prob = xgb.predict_proba(df_vector)[0, 1]
         
+        # 4. Generate Grad-CAM (Targeting the latent embedding activation)
+        target = latent_tensor.norm()
+        target.backward()
+        
+        gradients = encoder.gradients.cpu().data.numpy()[0]
+        activations = encoder.activations.cpu().data.numpy()[0]
+        weights = np.mean(gradients, axis=(1, 2))
+        
+        cam = np.zeros(activations.shape[1:], dtype=np.float32)
+        for i, w in enumerate(weights):
+            cam += w * activations[i]
+            
+        cam = np.maximum(cam, 0)
+        cam = cv2.resize(cam, (64, 64))
+        cam = cam - np.min(cam)
+        cam = cam / (np.max(cam) + 1e-8)
+        
+        heatmap = np.uint8(255 * cam)
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+        
+        # Overlay heatmap on original image
+        original_cv = np.array(pil_img.resize((64, 64)))
+        original_bgr = cv2.cvtColor(original_cv, cv2.COLOR_GRAY2BGR)
+        overlay = cv2.addWeighted(original_bgr, 0.5, heatmap, 0.5, 0)
+        
+        # Encode to Base64
+        _, buffer = cv2.imencode('.png', overlay)
+        heatmap_b64 = base64.b64encode(buffer).decode('utf-8')
+
         student_probs.append(prob)
-        processed_count += 1
+        results.append({
+            "filename": file.filename,
+            "probability": float(prob),
+            "heatmap_b64": heatmap_b64
+        })
+        
         
     if not student_probs:
         return {"error": "Could not extract features from the provided images."}
@@ -117,8 +164,8 @@ async def screen_student_sample(files: List[UploadFile] = File(...)):
     
     return {
         "status": "success",
-        "images_processed": processed_count,
+        "images_processed": len(results),
         "aggregate_risk_score": round(risk_score, 4),
         "flagged_for_review": flagged,
-        "letter_breakdown": [round(float(p), 4) for p in student_probs]
+        "results": results
     }
