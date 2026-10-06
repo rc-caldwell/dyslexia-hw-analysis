@@ -10,6 +10,8 @@ from xgboost import XGBClassifier, plot_importance
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
 import multiprocessing
+import re
+import string
 
 # 1. Define Encoder Architecture
 class Encoder(nn.Module):
@@ -91,13 +93,31 @@ def extract_and_train():
     print("Loading OpenCV geometric features and merging...")
     df_geo = pd.read_csv("data/processed/handwriting_features.csv")
     df_final = pd.merge(df_geo, df_latent, on='filename', how='inner')
+
+    print("Generating Target-Aware one-hot features...")
+    TARGET_CHARS = list(string.ascii_lowercase + string.digits)
+    
+    def get_one_hot_series(filename):
+        encoding = {f'target_{c}': 0 for c in TARGET_CHARS}
+        match = re.match(r'^([a-zA-Z0-9]+)[-_.]', filename)
+        if match:
+            char = match.group(1).lower()
+            if f'target_{char}' in encoding:
+                encoding[f'target_{char}'] = 1
+        return pd.Series(encoding)
+
+    # Apply the encoding across the dataframe and concatenate the new columns
+    one_hot_df = df_final['filename'].apply(get_one_hot_series)
+    df_final = pd.concat([df_final, one_hot_df], axis=1)
     
     # Prepare Train/Test Sets
     train_df = df_final[df_final['split'] == 'train']
     test_df = df_final[df_final['split'] == 'test']
     
+    target_cols = [f'target_{c}' for c in TARGET_CHARS]
     feature_cols = ['center_x', 'center_y', 'aspect_ratio', 'solidity', 'extent', 'left_density', 'right_density'] + \
-                   [f'latent_{i}' for i in range(32)]
+                   [f'latent_{i}' for i in range(32)] + \
+                   target_cols
     
     X_train, y_train = train_df[feature_cols], train_df['label']
     X_test, y_test = test_df[feature_cols], test_df['label']
