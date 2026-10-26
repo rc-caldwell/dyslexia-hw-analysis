@@ -7,7 +7,7 @@ import io
 
 st.set_page_config(page_title="Dysgraphia Screener", layout="wide")
 
-st.sidebar.header("⚙️ Clinical Settings")
+st.sidebar.header("⚙️ Tool Settings")
 st.sidebar.write("""
 **Diagnostic Sensitivity:**  
 Adjust the risk threshold for flagging a student.  
